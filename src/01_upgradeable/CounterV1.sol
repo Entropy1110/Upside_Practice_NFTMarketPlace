@@ -19,5 +19,6 @@ contract CounterV1 is UUPSUpgradeable, OwnableUpgradeable, ICounterV1 {
         }
     }
 
-    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
+    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {
+    }
 }
