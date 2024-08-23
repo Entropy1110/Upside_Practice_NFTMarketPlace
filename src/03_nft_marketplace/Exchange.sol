@@ -34,6 +34,8 @@ contract Exchange is EIP712, ReentrancyGuard, Ownable {
         uint256 price
     );
 
+    mapping(bytes32=>bool) orders;
+
     constructor(uint256 minimumFeeRate_, address feeRecipient_)
         EIP712("Upside NFT Exchange", "1")
         ReentrancyGuard()
@@ -55,10 +57,18 @@ contract Exchange is EIP712, ReentrancyGuard, Ownable {
         bytes32 buyHash = validateOrder(buy, buySig);
         bytes32 sellHash = validateOrder(sell, sellSig);
 
+        require(!orders[buyHash] && !orders[sellHash], "no reusable");
+
         // 두 개의 주문은 서로 매칭될 수 있어야 합니다.
         require(isMatchable(buy, sell), "not matchable");
 
-        // TODO: Assignment #6
+        
+        transferERC721(buy, sell);
+
+        transferFunds(buy, sell);
+
+        orders[buyHash] = true;
+        orders[sellHash] = true;
 
         // 거래가 완료된 후, 이벤트 로그를 생성하고 종료합니다.
         emit OrdersMatched(buyHash, sellHash, buy.maker, sell.maker, buy.erc721, buy.price);
@@ -74,14 +84,16 @@ contract Exchange is EIP712, ReentrancyGuard, Ownable {
     function validateOrder(Order memory order, Signature memory sig) internal view returns (bytes32) {
         bytes32 orderHash = hashToSign(order);
 
-        // TODO: Assignment #2
+        require(ecrecover(orderHash, sig.v, sig.r, sig.s) == order.maker, "invalid signature");
+
+        if (order.expirationTime > 0)
+            require(order.expirationTime >= block.timestamp, "order expired");
 
         return orderHash;
     }
 
     function isMatchable(Order memory buy, Order memory sell) public view returns (bool) {
-        // TODO: Assignment #3
-        return false;
+        return buy.side == OrderSide.BUY && sell.side == OrderSide.SELL && buy.erc721 == sell.erc721 && buy.tokenId == sell.tokenId && buy.price >= sell.price && buy.paymentToken == sell.paymentToken && buy.feeRate == sell.feeRate;
     }
 
     /*-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-*/
@@ -99,11 +111,22 @@ contract Exchange is EIP712, ReentrancyGuard, Ownable {
     }
 
     function transferERC20(Order memory buy, Order memory sell) internal {
-        // TODO: Assignment #4
+        // feeRecipient.
+        (uint256 price, uint256 fee) = calculateNetAmountAndFee(buy.price, buy.feeRate);
+        address seller = buy.taker == address(0) ? sell.maker : buy.taker;
+        address buyer = sell.taker == address(0) ? buy.maker : sell.taker;
+        IERC20(buy.paymentToken).transferFrom(buyer, feeRecipient, fee);
+        IERC20(buy.paymentToken).transferFrom(buyer, seller, price);
     }
 
     function transferNativeToken(Order memory buy, Order memory sell) internal {
-        // TODO: Assignment #4
+        (uint256 price, uint256 fee) = calculateNetAmountAndFee(buy.price, buy.feeRate);
+        address seller = buy.taker == address(0) ? sell.maker : buy.taker;
+        address buyer = sell.taker == address(0) ? buy.maker : sell.taker;
+
+        address(feeRecipient).call{value: fee}("");
+        address(seller).call{value: price}("");
+
     }
 
     function calculateNetAmountAndFee(uint256 price, uint256 feeRate) internal view returns (uint256, uint256) {
@@ -118,7 +141,12 @@ contract Exchange is EIP712, ReentrancyGuard, Ownable {
      * @dev seller -> buyer 에게 ERC721 토큰을 전송합니다.
      */
     function transferERC721(Order memory buy, Order memory sell) internal {
-        // TODO: Assignment #5
+
+        address seller = buy.taker == address(0) ? sell.maker : buy.taker;
+        address buyer = sell.taker == address(0) ? buy.maker : sell.taker;
+        
+        IERC721(buy.erc721).safeTransferFrom(seller, buyer, buy.tokenId);
+
     }
 
     /*-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-*/
@@ -135,8 +163,17 @@ contract Exchange is EIP712, ReentrancyGuard, Ownable {
         return keccak256(
             abi.encode(
                 _ORDER_TYPE_HASH,
-                // TODO: Assignment #1
-                order.exchange
+                order.exchange,
+                order.maker,
+                order.taker,
+                order.side,
+                order.erc721,
+                order.tokenId,
+                order.price,
+                order.paymentToken,
+                order.feeRate,
+                order.expirationTime,
+                order.salt
             )
         );
     }
